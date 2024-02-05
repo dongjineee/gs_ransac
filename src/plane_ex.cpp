@@ -42,6 +42,9 @@ private:
 
   int cnt = 0;
 
+  int runnig_cnt = 0;
+  double runnig_sum = 0;
+  double runnig_mean = 0;
 
 public:
   PointCloudConverter(){
@@ -57,8 +60,8 @@ public:
     pub_6 = nh_.advertise<sensor_msgs::PointCloud2>("/test_5", 1);
 
     nh_.param<std::string>("frame_id", frame_id, "ouster_lidar");
-
-    process_pcd_files("/home/dongjin/lidar_pr_data_set_1/pcd_file");  // PCD 파일 처리 메서드 호출
+    //process_pcd_files("/home/dongjin/p_file"); 
+    //process_pcd_files("/home/dongjin/lidar_pr_data_set_1/pcd_file");  // PCD 파일 처리 메서드 호출
 
   }
 
@@ -138,10 +141,16 @@ public:
     segmentResult = seg_plane<pcl::PointXYZ>(filtered_cloud.makeShared(), 250, 0.05, 5);
 
     end_time = ros::Time::now().toSec();
+    
     time = end_time-start_time;
     sum += time;
 
-    //ROS_INFO("%f",time);
+    runnig_cnt ++;
+    runnig_sum += time;
+    runnig_mean = runnig_sum/runnig_cnt;
+
+    //printf("%f %f %d\n",runnig_mean,runnig_sum, runnig_cnt);
+
     start_time = ros::Time::now().toSec();
     // Convert the first PointCloud to ROS message and publish
     sensor_msgs::PointCloud2 test_1_cloud;
@@ -215,6 +224,8 @@ public:
     sor.filter(filtered_cloud);
     //std::cerr << "Voxeled " << filtered_cloud.points.size () << std::endl;
 
+/*차량의 지붕 filtering*/
+/*
     pcl::CropBox<pcl::PointXYZ> roi;
     roi.setMin(minPoint);
     roi.setMax(maxPoint);
@@ -240,6 +251,8 @@ public:
     extract.setIndices(inliers);
     extract.setNegative(true);
     extract.filter(filtered_cloud); //천장에 대한 point 제거
+    */ 
+
     //std::cerr << "extract " << filtered_cloud.points.size () << std::endl;
     return filtered_cloud;
   }
@@ -304,7 +317,7 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
 
 
         for(int it = 0; it < maxIterations; it++) {
-            std::unordered_set<int> tempIndices;
+            std::unordered_set<int> tempIndices; //인라이어의 index를 임시 저장하는 컨테이너
             while(tempIndices.size() < 3) {
                 tempIndices.insert(rand() % remainingCloud->points.size());
             }
@@ -320,7 +333,7 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
             float d = -(a * point1.x + b * point1.y + c * point1.z);
 
             for(int index = 0; index < remainingCloud->points.size(); index++) {
-                if(tempIndices.find(index) == tempIndices.end()) {
+                if(tempIndices.find(index) == tempIndices.end()) { // 앞서에서 뽑은 3개의 pc를 제외하고 진행하려고 넣은듯 굳이 없어도 결과는 같은것으로 예상
 
                     PointXYZ point = remainingCloud->points[index];
 
@@ -331,7 +344,7 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
                     }
 
                 }
-            }
+            } // outlier의 point만 가지고 model 추출
 
             if(tempIndices.size() > largestPlaneSize) {
                 largestPlaneSize = tempIndices.size();
@@ -373,7 +386,7 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
         end_normal_vector.push_back(bestNormal_normalized);
     }
 
-    //for(int i = 1; i < 5; i++) ROS_INFO("%d   %f %f %f", cnt,abs(end_normal_vector[i][0]),abs(end_normal_vector[i][1]),abs(end_normal_vector[i][2]));     
+    for(int i = 0; i < 5; i++) ROS_INFO("%d   %f %f %f", cnt,abs(end_normal_vector[i][0]),abs(end_normal_vector[i][1]),abs(end_normal_vector[i][2]));     
     //최종 plane의 normal_vector에 abs 취한것
 
 /* normal vector 간의 연관성있는 plane 추출*/
@@ -402,6 +415,16 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
     return std::make_pair(plane_types, planes);
 
 }
+
+// double calculateProbabilityGivenT(int T, double e, int s) {
+//     double p = 1.0 - std::exp(T * std::log(1.0 - std::pow(1.0 - e, s)));
+//     return p;
+// }
+
+// int calculateRansacIterations(double p, double e, int s) {
+//     double T = std::log(1 - p) / std::log(1 - std::pow(1 - e, s));
+//     return static_cast<int>(std::ceil(T));
+// }
 
 bool ground_seg(Eigen::Vector3f most_value_vector)
 {
