@@ -17,6 +17,7 @@
 #include <boost/filesystem.hpp>
 
 #include <math.h>
+
 namespace fs = boost::filesystem;
 class PointCloudConverter {
 private:
@@ -40,11 +41,15 @@ private:
   #define x_wall 2
   #define not_plane 33
 
+  #define max_time 200
+
   int cnt = 0;
 
   int runnig_cnt = 0;
   double runnig_sum = 0;
   double runnig_mean = 0;
+
+  std::vector<uint16_t> parameter_vector;
 
 public:
   PointCloudConverter(){
@@ -60,8 +65,10 @@ public:
     pub_6 = nh_.advertise<sensor_msgs::PointCloud2>("/test_5", 1);
 
     nh_.param<std::string>("frame_id", frame_id, "ouster_lidar");
-    //process_pcd_files("/home/dongjin/p_file"); 
-    //process_pcd_files("/home/dongjin/lidar_pr_data_set_1/pcd_file");  // PCD 파일 처리 메서드 호출
+
+    parameter_vector = Iteration_initial(max_time);
+    //process_pcd_files("/home/dongjin/p_file/[pcd_file_name]");
+    process_pcd_files("/home/dongjineee/plane_ws/src/gs_ransac/data_set/pcd_file"); // PCD 파일 처리 메서드 호출
 
   }
 
@@ -72,6 +79,7 @@ public:
         }
         return number.empty() ? 0 : std::stoi(number);
     }
+    
     void process_pcd_files(const std::string& directory_path) {
         fs::path p(directory_path);
         std::vector<fs::path> pcd_files;
@@ -95,7 +103,6 @@ public:
         }
     }
 
-
     void process_single_pcd_file(const std::string& pcd_file) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr loaded_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file, *loaded_cloud) == -1) {
@@ -107,12 +114,14 @@ public:
          ransac(*loaded_cloud); // 이 부분은 ransac 함수의 구현에 따라 달라집니다.
     }
 
-  // void process_pcd_files() {
-  //   // PCD 파일 리스트를 반복하면서 처리
-  //   for (const std::string& pcd_file : pcd_file_list_) {
-  //     process_single_pcd_file(pcd_file);
-  //   }
-  // }
+/*
+  void process_pcd_files() {
+    // PCD 파일 리스트를 반복하면서 처리
+    for (const std::string& pcd_file : pcd_file_list_) {
+      process_single_pcd_file(pcd_file);
+    }
+  }
+*/ // pcd 1개 실행
 
   void pointCloud2Callback(const sensor_msgs::PointCloud2ConstPtr& input_cloud) {
     // PointCloud2를 pcl::PointCloud로 변환
@@ -128,7 +137,7 @@ public:
     start_time = ros::Time::now().toSec();
 
     pcl::PointCloud<pcl::PointXYZ> filtered_cloud ;
-    filtered_cloud = filter_cloud(input_cloud, 0.15, Eigen::Vector4f(-20, -6, -2, 1), Eigen::Vector4f(30, 7, 5, 1));
+    filtered_cloud = filter_cloud(input_cloud, 0.3, Eigen::Vector4f(-20, -6, -2, 1), Eigen::Vector4f(30, 7, 5, 1)); //0.3 = 0.26sec, 0.25 = 0.39 sec
 
     sensor_msgs::PointCloud2 test_cloud;  
     test_cloud.header.frame_id = frame_id;
@@ -138,7 +147,7 @@ public:
     pub_1.publish(test_cloud);
 
     std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>> segmentResult;
-    segmentResult = seg_plane<pcl::PointXYZ>(filtered_cloud.makeShared(), 250, 0.05, 5);
+    segmentResult = seg_plane<pcl::PointXYZ>(filtered_cloud.makeShared(), parameter_vector, 0.1, 5);
 
     end_time = ros::Time::now().toSec();
     
@@ -149,8 +158,8 @@ public:
     runnig_sum += time;
     runnig_mean = runnig_sum/runnig_cnt;
 
-    //printf("%f %f %d\n",runnig_mean,runnig_sum, runnig_cnt);
-
+    ROS_INFO("%f %f %d\n",runnig_mean,runnig_sum, runnig_cnt);
+    //ROS_INFO("%f sec\n",time);
     start_time = ros::Time::now().toSec();
     // Convert the first PointCloud to ROS message and publish
     sensor_msgs::PointCloud2 test_1_cloud;
@@ -280,21 +289,37 @@ uint8_t plane_jurdgment( Eigen::Vector3f normal_vector)
             return i; // 조건을 만족하는 축에 해당하는 포지션 반환
             
         }
-
     }
-
-    
     return 33; // 어떤 축과도 매치되지 않는 경우
 }
+
+int ransac_number_calculate(double in_out_ratio)
+{ 
+    int T = std::log(1 - 0.99) / std::log(1 - std::pow(1 - in_out_ratio, 3));      
+
+    if(T > max_time) return max_time;
+          
+    return T;
+} // ransac parmeter calculate
+
+std::vector<uint16_t> Iteration_initial(uint16_t time)
+{
+    std::vector<uint16_t> plane_time;
+
+    for(int i = 0; i < 5; i++) plane_time.push_back(time);
+
+    return plane_time;
+} // initial ransac_number parmeter
 
 // 2개 변수 return, vector<pcl:XYZ> -> plane에 관한 PCD, vector<int> -> plane에 관한 id 0: ground, 1 : y-wall, 2 : x-wall
 template<typename PointXYZ>
 std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>>  seg_plane(
     typename pcl::PointCloud<PointXYZ>::Ptr input_cloud, 
-    int maxIterations, 
+    std::vector<uint16_t> maxIterations, 
     float distanceThreshold, 
     uint8_t planes_num)
 {
+    ROS_INFO("%d %d %d %d %d", maxIterations[0],maxIterations[1],maxIterations[2],maxIterations[3],maxIterations[4]); //number check
 
     std::vector<typename pcl::PointCloud<PointXYZ>::Ptr> planes;
     std::vector<uint8_t> plane_types;
@@ -313,10 +338,11 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
         Eigen::Vector3f bestNormal(0, 0, 0);
 
         uint8_t type;
-        std::vector<uint8_t> cost_seg{0,0,0}; 
 
-
-        for(int it = 0; it < maxIterations; it++) {
+        double in_out_ratio = 0; //outliner ratio
+        
+        for(int it = 0; it < maxIterations[k]; it++) {
+                
             std::unordered_set<int> tempIndices; //인라이어의 index를 임시 저장하는 컨테이너
             while(tempIndices.size() < 3) {
                 tempIndices.insert(rand() % remainingCloud->points.size());
@@ -342,7 +368,6 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
                     if(distance <= distanceThreshold) {
                         tempIndices.insert(index); // 평면에 속하는 pc의 index를 집어 넣음
                     }
-
                 }
             } // outlier의 point만 가지고 model 추출
 
@@ -354,7 +379,6 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
 
         } 
       
-        
         if(largestPlaneSize == 0) {
             break; // 더 이상 평면을 찾을 수 없음
         }
@@ -370,14 +394,21 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
                 cloudOutliers->points.push_back(point); // input_data update ( outliners )
         }
 
+        in_out_ratio = cloudOutliers->points.size()/double(remainingCloud->points.size());
+  
+        parameter_vector[k] = ransac_number_calculate(in_out_ratio);  
+
+        //ROS_INFO("%d %f",parameter_vector[k], in_out_ratio);
         Eigen::Vector3f bestNormal_normalized = bestNormal.normalized();
  
-        type = plane_jurdgment(bestNormal);
+        //type = plane_jurdgment(bestNormal);
 
+/*
         if((type == 0) || (type == 3))  plane_types_data = ground;
         else if((type == 1) || (type == 4)) plane_types_data = y_wall;
         else if((type == 2) || (type == 5)) plane_types_data = x_wall;
         else plane_types_data = not_plane;
+*/  // plane clustering
 
         planes.push_back(planeCloud);
         plane_types.push_back(plane_types_data);
@@ -386,58 +417,75 @@ std::pair<std::vector<uint8_t>, std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>
         end_normal_vector.push_back(bestNormal_normalized);
     }
 
-    for(int i = 0; i < 5; i++) ROS_INFO("%d   %f %f %f", cnt,abs(end_normal_vector[i][0]),abs(end_normal_vector[i][1]),abs(end_normal_vector[i][2]));     
+    //for(int i = 0; i < 5; i++) ROS_INFO("%d   %f %f %f", cnt,abs(end_normal_vector[i][0]),abs(end_normal_vector[i][1]),abs(end_normal_vector[i][2]));     
     //최종 plane의 normal_vector에 abs 취한것
 
 /* normal vector 간의 연관성있는 plane 추출*/
-    int test = 6;
-    bool start_num = ground_seg(end_normal_vector[0]);
+       
+    uint8_t ground_id = ground_seg(end_normal_vector);
 
-    for(int k = start_num; k < 4; k++)
-    {
-        float theta;
-
-        Eigen::Vector3f abs_vector_0(abs(end_normal_vector[start_num][0]),abs(end_normal_vector[start_num][1]),abs(end_normal_vector[start_num][2]));
-        Eigen::Vector3f abs_vector_1(abs(end_normal_vector[k+1][0]),abs(end_normal_vector[k+1][1]),abs(end_normal_vector[k+1][2]));
-    
-        theta = acos(abs_vector_0.dot(abs_vector_1));
-
-        if(theta < 5.0*M_PI/180) 
-        {
-            test = k;
-            break;
-        }
-    }
-
-    if(test != 6)ROS_INFO("%d plane %d plane is same axis", start_num, test+1);
-    else ROS_INFO(" NOT SAME !!");
+    std::vector<Eigen::Vector3f> plane_n_vector; 
+    plane_n_vector = normal_vector_container(end_normal_vector, ground_id);
+    pair_vector(plane_n_vector);
+    //for(int i = 0; i < 5; i++) ROS_INFO("%d   %f %f %f", cnt,abs(plane_n_vector[i][0]),abs(plane_n_vector[i][1]),abs(plane_n_vector[i][2]));  
+    cnt ++;    
 
     return std::make_pair(plane_types, planes);
 
 }
 
-// double calculateProbabilityGivenT(int T, double e, int s) {
-//     double p = 1.0 - std::exp(T * std::log(1.0 - std::pow(1.0 - e, s)));
-//     return p;
-// }
-
-// int calculateRansacIterations(double p, double e, int s) {
-//     double T = std::log(1 - p) / std::log(1 - std::pow(1 - e, s));
-//     return static_cast<int>(std::ceil(T));
-// }
-
-bool ground_seg(Eigen::Vector3f most_value_vector)
+void pair_vector(std::vector<Eigen::Vector3f> plane_n_vector)
 {
-    Eigen::Vector3f abs_vector(abs(most_value_vector[0]), abs(most_value_vector[1]),abs(most_value_vector[2]));
-    Eigen::Vector3f z_axis(0, 0, 1);
+    uint8_t iter_ = 5;
 
-    int theta = acos(abs_vector.dot(z_axis));
-    if(theta < 5.0*M_PI/180) 
+    for(int k = 1; k < 4; k++)
     {
-        return 1; // 바닥이라 판단  
+        float theta;
+    
+        theta = acos(plane_n_vector[0].dot(plane_n_vector[k]));
+
+        if(theta < 5.0*M_PI/180) 
+        {
+            iter_ = k;
+            break;
+        }
     }
 
-    return 0;
+    if(iter_ != 5)ROS_INFO("1 plane %d plane is same axis", iter_+1);
+    else ROS_INFO(" NOT SAME !!");
+}
+
+std::vector<Eigen::Vector3f> normal_vector_container(std::vector<Eigen::Vector3f> normal_vector, uint8_t ground_id)
+{
+    std::vector<Eigen::Vector3f> normal_vector_iter;
+    Eigen::Vector3f ground_normal_vector;
+    for(int i = 0; i < normal_vector.size(); i++)
+    {
+        Eigen::Vector3f abs_vector(abs(normal_vector[i][0]),abs(normal_vector[i][1]),abs(normal_vector[i][2]));
+        if(ground_id != i) normal_vector_iter.push_back(abs_vector);
+        else ground_normal_vector = abs_vector; //ground 인 vector를 마지막 vector로 정렬
+    }
+
+    normal_vector_iter.push_back(ground_normal_vector);
+
+    return normal_vector_iter;
+} //vector_sort
+
+uint8_t ground_seg(std::vector<Eigen::Vector3f> end_normal_vector)
+{
+    for(int i = 0; i < end_normal_vector.size(); i++)
+    {
+        Eigen::Vector3f abs_vector(abs(end_normal_vector[i][0]), abs(end_normal_vector[i][1]),abs(end_normal_vector[i][2]));
+        Eigen::Vector3f z_axis(0, 0, 1);
+
+        int theta = acos(abs_vector.dot(z_axis));
+        if(theta < 5.0*M_PI/180) 
+        {
+            return i; // plane id  
+        }
+    }
+    
+    return 33; // not ground
 }
 
 };
